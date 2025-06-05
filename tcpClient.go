@@ -13,4 +13,11 @@ func tcpClient() {
 	}
 	defer conn.Close()
 
+	data := []byte("Hello, Server!")
+	_, err = conn.Write(data)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
 }
