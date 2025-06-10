@@ -8,6 +8,7 @@ import (
 func main() {
 	// Listen for incoming connection
 	listener, err := net.Listen("tcp", "localhost:8080")
+	// Telling the os that I only want handle tcp traffic. and listen on port 8080
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
