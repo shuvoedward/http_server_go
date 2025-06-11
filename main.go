@@ -121,6 +121,7 @@ func handleClient(conn net.Conn) {
 
 	}
 
+	// Routing
 	var statusLine, body string
 
 	if method == "GET" && path == "/" {
@@ -129,11 +130,16 @@ func handleClient(conn net.Conn) {
 	} else if method == "GET" && path == "/hello" {
 		statusLine = "HTTP/1.1 200 OK"
 		body = "Hello there!"
+	} else if method == "GET" && strings.HasPrefix(path, "/echo") {
+		value := strings.TrimPrefix(path, "/echo/")
+		statusLine = "HTTP/1.1 200 OK"
+		body = value
 	} else {
 		statusLine = "HTTP/1.1 404 Not Found"
 		body = "404"
 	}
 
+	body += "\n"
 	response := fmt.Sprintf("%s\r\nContent-Length: %d\r\nContent-Type: text/plain\r\n\r\n%s",
 		statusLine, len(body), body)
 
