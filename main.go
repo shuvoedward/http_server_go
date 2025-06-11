@@ -92,9 +92,9 @@ func handleClient(conn net.Conn) {
 		return
 	}
 
-	requestLine = strings.TrimRight(requestLine, "\r\n")
+	requestLine = strings.TrimRight(requestLine, "\r\n") // GET / HTTP/1.1
 
-	parts := strings.Split(requestLine, " ")
+	parts := strings.Split(requestLine, " ") // [GET, /, HTTP/1.1]
 	if len(parts) < 3 {
 		fmt.Println("Malformed request line:", requestLine)
 		return
@@ -105,9 +105,10 @@ func handleClient(conn net.Conn) {
 	fmt.Println("Path: ", path)
 	fmt.Println("Version: ", version)
 
-	// Read Headers
+	// Read Headers, not body
 	for {
 		line, err := reader.ReadString('\n')
+		fmt.Println(line)
 		if err != nil {
 			fmt.Println("Error reading header:", err)
 			return
@@ -120,6 +121,21 @@ func handleClient(conn net.Conn) {
 
 	}
 
-	response := "HTTP/1.1 200 OK\r\n"
+	var statusLine, body string
+
+	if method == "GET" && path == "/" {
+		statusLine = "HTTP/1.1 200 OK"
+		body = "Welcome"
+	} else if method == "GET" && path == "/hello" {
+		statusLine = "HTTP/1.1 200 OK"
+		body = "Hello there!"
+	} else {
+		statusLine = "HTTP/1.1 404 Not Found"
+		body = "404"
+	}
+
+	response := fmt.Sprintf("%s\r\nContent-Length: %d\r\nContent-Type: text/plain\r\n\r\n%s",
+		statusLine, len(body), body)
+
 	conn.Write([]byte(response))
 }
