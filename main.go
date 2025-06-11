@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -106,7 +108,9 @@ func handleClient(conn net.Conn) {
 	fmt.Println("Version: ", version)
 
 	// Read Headers, not body
+	headers := make(map[string]string)
 	for {
+
 		line, err := reader.ReadString('\n')
 		fmt.Println(line)
 		if err != nil {
@@ -119,6 +123,44 @@ func handleClient(conn net.Conn) {
 			break
 		}
 
+		// Parse header line: Key: Value
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			headers[key] = value
+			fmt.Printf("Header: %s = %s\n", key, value)
+		} else {
+			fmt.Println("Malformed header line:", line)
+		}
+
+	}
+
+	var requestBody string
+	if contentLegnthStr, ok := headers["Content-Length"]; ok {
+		contentLegnth, err := strconv.Atoi(contentLegnthStr)
+		if err != nil {
+			fmt.Println("Error parsing Content-Length:", err)
+			// might send 400 bad request
+			return
+		}
+
+		if contentLegnth > 0 {
+			bodyBytes := make([]byte, contentLegnth)
+			n, err := io.ReadFull(reader, bodyBytes) // Read exactly content length
+			if err != nil {
+				fmt.Println("Error reading request body:", err)
+				return
+			}
+
+			if n != contentLegnth {
+				fmt.Println("Did not read full body:", n, "byte read, expected", contentLegnth)
+				return
+			}
+
+			requestBody = string(bodyBytes)
+			fmt.Println("Request body:", requestBody)
+		}
 	}
 
 	// Routing
@@ -134,6 +176,9 @@ func handleClient(conn net.Conn) {
 		value := strings.TrimPrefix(path, "/echo/")
 		statusLine = "HTTP/1.1 200 OK"
 		body = value
+	} else if method == "POST" && path == "/submit" {
+		statusLine = "HTTP/1.1 200 OK"
+		body = fmt.Sprintf("Recieved: %s", requestBody)
 	} else {
 		statusLine = "HTTP/1.1 404 Not Found"
 		body = "404"
