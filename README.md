@@ -45,3 +45,70 @@ This project showcases a strong understanding of various Go and server-side prog
 ## Project Structure
 
 The code is organized into several files within the `main` package for clarity and modularity:
+
+├── main.go               # Main server loop, connection handling, graceful shutdown, handleClient
+├── netServer.go             # Defines Handle function and the global routes map
+├── request.go            # Defines the Request struct and ParseRequest function
+├── response.go           # Defines the ResponseWriter struct and its methods
+├── middleware.go         # Defines HandlerFunc, Middleware types, Chain function, Logging/RecoverMiddleware
+└── handlers.go           # Contains specific application handler functions (e.g., handleIndex, handleHello)
+
+
+## How to Run
+
+1.  **Clone the repository:**
+    ```bash
+    git clone <your-repo-url>
+    cd <your-repo-name>
+    ```
+2.  **Build the application:**
+    ```bash
+    go build -o server .
+    ```
+3.  **Run the server:**
+    ```bash
+    ./server
+    ```
+    You should see output similar to: `Server is listening on port 8080`
+
+## API Endpoints
+
+You can interact with the server using `curl` or by visiting the URLs in your web browser.
+
+### `GET /`
+Returns a welcome message.
+
+```bash
+curl http://localhost:8080/
+# Expected output: Welcome to my Go server!
+```
+### `GET /hello`
+Returns a simple "Hello" message.
+
+```bash 
+curl http://localhost:8080/hello
+# Expected output: Hello
+```
+
+
+## Graceful Shutdown
+To gracefully shut down the server, send an interrupt signal (e.g., Ctrl+C in the terminal where the server is running):
+
+```bash
+^C
+# Expected output on server console:
+# Shutting down gracefully...
+# Waiting for active connections to drain...
+# All active connections drained cleanly. (or Timeout waiting for connections to drain. Forcibly closing remaining.)
+# Server shutdown complete.
+```
+## Future Improvements
+
+* Implement support for parsing application/json and application/x-www-form-urlencoded request bodies.
+* Add support for URL query parameters (e.g., /search?q=keyword).
+* Implement basic path parameters (e.g., /users/{id}).
+* Explore using net/http for comparison and understanding framework benefits.
+* Add unit tests for individual components (request parsing, response writing, middleware).
+
+## License
+This project is open source and available under the [MIT License](LICENSE)
