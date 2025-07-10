@@ -1,17 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 var (
@@ -20,99 +16,21 @@ var (
 )
 
 type header map[string]string
-type Request struct {
-	Method  string
-	Path    string
-	Version string
-	Headers header
-	// QueryParams map[string][]string
-	Body []byte
-}
-
-type ResponseWriter struct {
-	Conn    net.Conn
-	Headers header
-	Status  int
-	Body    []byte
-}
-
-func NewResponseWriter(c net.Conn) *ResponseWriter {
-	return &ResponseWriter{
-		Conn:    c,
-		Headers: header{},
-	}
-}
-
-func (w *ResponseWriter) Header(key, val string) {
-	w.Headers[key] = val
-}
-
-func (w *ResponseWriter) WriteHeader(status int) {
-	w.Status = status
-}
-
-func (w *ResponseWriter) Write(body []byte) int {
-	w.Body = append(w.Body, body...)
-	return len(body)
-}
-
-func (w *ResponseWriter) Send() error {
-	// 1. Ensure status code, default to 200 OK
-	if w.Status == 0 {
-		w.Status = 200
-	}
-
-	// 2. Textual phrase for status
-	statusText := http.StatusText(w.Status)
-
-	// 3. Building the response head status line
-	// e.g., "HTTP/1.1 200 OK"
-	head := fmt.Sprintf("HTTP/1.1 %d %s\r\n", w.Status, statusText)
-
-	w.Headers["Content-Length"] = strconv.Itoa(len(w.Body))
-
-	// Serialize each header
-	for name, value := range w.Headers {
-		head += fmt.Sprintf("%s: %s\r\n", name, value)
-	}
-
-	// Separate headers from the body
-	head += "\r\n"
-
-	// Write header
-	if _, err := w.Conn.Write([]byte(head)); err != nil {
-		return err
-	}
-
-	// Write body
-	if len(w.Body) > 0 {
-		if _, err := w.Conn.Write([]byte(w.Body)); err != nil {
-			return err
-		}
-	}
-
-	return nil
-
-}
-
-type HandlerFunc func(w *ResponseWriter, r *Request)
-
-var routes = map[string]map[string]HandlerFunc{
-	"GET":  {},
-	"POST": {},
-}
-
-func Handle(method, path string, h HandlerFunc) {
-	if routes[method] == nil {
-		routes[method] = make(map[string]HandlerFunc)
-	}
-	routes[method][path] = h
-}
 
 func main() {
-	Handle("GET", "/", handleIndex)
+
+	var wg sync.WaitGroup
+
+	globalMW := []Middleware{
+		RecoverMiddleware,
+		LoggingMiddleware,
+	}
+
+	Handle("GET", "/", Chain(globalMW, handleIndex))
 	Handle("GET", "/hello", handleHello)
 	Handle("POST", "/submit", handleSubmit)
+	//routes["GET"]["/"] = handler1
+	//routes["GET"]["/"] = handler2
 
 	// Listen for incoming connection
 	listener, err := net.Listen("tcp", "localhost:8080")
@@ -130,18 +48,35 @@ func main() {
 
 	go func() {
 
-		<-ctx.Done()
+		<-ctx.Done() // Wait for SIGINT/SIGTERM
 
 		fmt.Println("\nShutting down gracefully...")
 
-		// Stop accepting new connections
+		// 1. Stop accepting new connections
 		listener.Close()
 
+		fmt.Println("Waiting for active connections to drain...")
+		done := make(chan struct{}) // channel to signal when WaitGroup is done
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		// 3. Implement a timeout for waiting for connections
+		select {
+		case <-done:
+			fmt.Println("All active connection drained")
+		case <-time.After(5 * time.Second): // giving 5 seconds for existing requests to complete
+			fmt.Println("Timeout waiting for conenctions to drain. Forcibly closing remaining.")
+		}
+
+		// 4. Forcefully close any remaining active connections
 		mu.Lock()
 		for conn := range activeConns {
 			conn.Close()
 		}
 		mu.Unlock()
+		fmt.Println("Server shutdown complete.")
 	}()
 
 	for {
@@ -166,17 +101,21 @@ func main() {
 		activeConns[conn] = struct{}{}
 		mu.Unlock()
 
+		wg.Add(1)
 		// Handle client connection in goroutine
-		go handleClient(conn)
+		go handleClient(conn, &wg)
+		// wg is passed as a pointer because wg should be shared and
+		// modified by multiple goroutines.
 	}
 }
 
-func handleClient(conn net.Conn) {
+func handleClient(conn net.Conn, wg *sync.WaitGroup) {
 	defer func() {
 		conn.Close()
 		mu.Lock()
 		delete(activeConns, conn)
 		mu.Unlock()
+		wg.Done()
 	}()
 
 	req, err := ParseRequest(conn)
@@ -209,110 +148,4 @@ func handleClient(conn net.Conn) {
 	// Send whatever the handler wrote
 	rw.Send()
 
-}
-
-func ParseRequest(conn net.Conn) (*Request, error) {
-
-	// 1. Buffer to read data
-	reader := bufio.NewReader(conn) // buffered input output []bytes
-
-	// 2. Read the request line (first line) "GET / HTTP/1.1\r\n"
-	requestLine, err := reader.ReadString('\n')
-	if err != nil {
-		fmt.Println("Error reading request line:", err)
-		return nil, err
-	}
-
-	requestLine = strings.TrimRight(requestLine, "\r\n") // GET / HTTP/1.1
-
-	parts := strings.Split(requestLine, " ") // [GET, /, HTTP/1.1]
-	if len(parts) < 3 {
-		fmt.Println("Malformed request line:", requestLine)
-		return nil, err
-	}
-
-	method, path, version := parts[0], parts[1], parts[2]
-	fmt.Println("Method: ", method)
-	fmt.Println("Path: ", path)
-	fmt.Println("Version: ", version)
-
-	// Read Headers
-	headers := make(header)
-	for {
-
-		line, err := reader.ReadString('\n')
-		fmt.Println(line)
-		if err != nil {
-			fmt.Println("Error reading header:", err)
-			return nil, err
-		}
-
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break
-		}
-
-		// Parse header line: Key: Value
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			headers[key] = value
-			fmt.Printf("Header: %s = %s\n", key, value)
-		} else {
-			fmt.Println("Malformed header line:", line)
-		}
-
-	}
-	// Body
-	var requestBody string
-	if contentLegnthStr, ok := headers["Content-Length"]; ok {
-		contentLegnth, err := strconv.Atoi(contentLegnthStr)
-		if err != nil {
-			fmt.Println("Error parsing Content-Length:", err)
-			// might send 400 bad request
-			return nil, err
-		}
-
-		if contentLegnth > 0 {
-			bodyBytes := make([]byte, contentLegnth)
-			n, err := io.ReadFull(reader, bodyBytes) // Read exactly content length
-			if err != nil {
-				fmt.Println("Error reading request body:", err)
-				return nil, err
-			}
-
-			if n != contentLegnth {
-				fmt.Println("Did not read full body:", n, "byte read, expected", contentLegnth)
-				return nil, err
-			}
-
-			requestBody = string(bodyBytes)
-			fmt.Println("Request body:", requestBody)
-		}
-	}
-
-	return &Request{
-		Method:  method,
-		Path:    path,
-		Version: version,
-		Headers: headers,
-		Body:    []byte(requestBody),
-	}, nil
-}
-
-func handleIndex(w *ResponseWriter, r *Request) {
-	w.Header("Content-Type", "text/plain")
-	w.Write([]byte("Welcome to my Go server!\n"))
-}
-
-func handleHello(w *ResponseWriter, r *Request) {
-	w.Header("Content-Type", "text/plain")
-	w.Write([]byte("Hello\n"))
-}
-
-func handleSubmit(w *ResponseWriter, r *Request) {
-	w.Header("Content-Type", "text/plain")
-	w.WriteHeader(201)
-	w.Write([]byte("Recieved\n"))
 }
